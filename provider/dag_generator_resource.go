@@ -30,6 +30,7 @@ type dagGeneratorResource struct {
 type dagGeneratorResourceModel struct {
 	DagGeneratorBackendURL types.String `tfsdk:"dag_generator_backend_url"`
 	TemplateGCSPath        types.String `tfsdk:"template_gcs_path"`
+	TemplateContent        types.String `tfsdk:"template_content"`
 	TargetGCSPath          types.String `tfsdk:"target_gcs_path"`
 	ContextJSON            types.String `tfsdk:"context_json"`
 	GeneratedFileChecksum  types.String `tfsdk:"generated_file_checksum"`
@@ -58,10 +59,14 @@ func (r *dagGeneratorResource) Schema(_ context.Context, _ resource.SchemaReques
 			},
 			"template_gcs_path": schema.StringAttribute{
 				Description: "The full gs:// path to the source Jinja2 template.",
-				Required:    true,
+				Optional:    true,
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 				},
+			},
+			"template_content": schema.StringAttribute{
+				Description: "The content of the local template file.",
+				Optional:    true,
 			},
 			"target_gcs_path": schema.StringAttribute{
 				Description: "The full gs:// path for the generated output file.",
@@ -91,12 +96,23 @@ func (r *dagGeneratorResource) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 
+	gcsPath := plan.TemplateGCSPath.ValueString()
+	content := plan.TemplateContent.ValueString()
+
+	if (gcsPath == "" && content == "") || (gcsPath != "" && content != "") {
+		resp.Diagnostics.AddError(
+			"Invalid Configuration",
+			"Exactly one of `template_gcs_path` or `template_content` must be specified.",
+		)
+		return
+	}
+
 	// Initialize API client and service using backend_url from the plan
 	apiClient := client.NewDagGeneratorAPIClient(plan.DagGeneratorBackendURL.ValueString())
 	dagGenService := &client.DagGeneratorService{Client: apiClient}
 
 	contextJSON := plan.ContextJSON.ValueString()
-	generationResult, err := dagGenService.Generate(ctx, plan.TemplateGCSPath.ValueString(), plan.TargetGCSPath.ValueString(), contextJSON)
+	generationResult, err := dagGenService.Generate(ctx, gcsPath, content, plan.TargetGCSPath.ValueString(), contextJSON)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to generate DAG", err.Error())
 		return
@@ -145,12 +161,23 @@ func (r *dagGeneratorResource) Update(ctx context.Context, req resource.UpdateRe
 		return
 	}
 
+	gcsPath := plan.TemplateGCSPath.ValueString()
+	content := plan.TemplateContent.ValueString()
+
+	if (gcsPath == "" && content == "") || (gcsPath != "" && content != "") {
+		resp.Diagnostics.AddError(
+			"Invalid Configuration",
+			"Exactly one of `template_gcs_path` or `template_content` must be specified.",
+		)
+		return
+	}
+
 	// Initialize API client and service using backend_url from the plan
 	apiClient := client.NewDagGeneratorAPIClient(plan.DagGeneratorBackendURL.ValueString())
 	dagGenService := &client.DagGeneratorService{Client: apiClient}
 
 	contextJSON := plan.ContextJSON.ValueString()
-	generationResult, err := dagGenService.Generate(ctx, plan.TemplateGCSPath.ValueString(), plan.TargetGCSPath.ValueString(), contextJSON)
+	generationResult, err := dagGenService.Generate(ctx, gcsPath, content, plan.TargetGCSPath.ValueString(), contextJSON)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to update DAG", err.Error())
 		return

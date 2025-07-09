@@ -40,10 +40,11 @@ type StatusResponse struct {
 }
 
 // Generate calls the backend to create or update a file.
-func (s *DagGeneratorService) Generate(ctx context.Context, templatePath, targetPath string, contextJSON string) (*GenerateResponse, error) {
+func (s *DagGeneratorService) Generate(ctx context.Context, templatePath, templateContent, targetPath string, contextJSON string) (*GenerateResponse, error) {
 	url := fmt.Sprintf("%s/generate", s.Client.BaseURL)
 	payload := map[string]interface{}{
 		"template_gcs_path": templatePath,
+		"template_content":  templateContent,
 		"target_gcs_path":   targetPath,
 		"context_json":      contextJSON,
 	}
