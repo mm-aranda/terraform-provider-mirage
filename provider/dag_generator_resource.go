@@ -28,14 +28,15 @@ type dagGeneratorResource struct {
 }
 
 type dagGeneratorResourceModel struct {
-	DagGeneratorBackendURL types.String `tfsdk:"dag_generator_backend_url"`
-	TemplateGCSPath        types.String `tfsdk:"template_gcs_path"`
-	TemplateContent        types.String `tfsdk:"template_content"`
-	TargetGCSPath          types.String `tfsdk:"target_gcs_path"`
-	ContextJSON            types.String `tfsdk:"context_json"`
-	GeneratedFileChecksum  types.String `tfsdk:"generated_file_checksum"`
-	GCSGenerationNumber    types.String `tfsdk:"gcs_generation_number"`
-	ID                     types.String `tfsdk:"id"`
+	DagGeneratorBackendURL   types.String `tfsdk:"dag_generator_backend_url"`
+	TemplateGCSPath          types.String `tfsdk:"template_gcs_path"`
+	TemplateContent          types.String `tfsdk:"template_content"`
+	TargetGCSPath            types.String `tfsdk:"target_gcs_path"`
+	ContextJSON              types.String `tfsdk:"context_json"`
+	GeneratedFileChecksum    types.String `tfsdk:"generated_file_checksum"`
+	GCSGenerationNumber      types.String `tfsdk:"gcs_generation_number"`
+	ID                       types.String `tfsdk:"id"`
+	UseGCPServiceAccountAuth types.Bool   `tfsdk:"use_gcp_service_account_auth"`
 }
 
 func (r *dagGeneratorResource) Configure(ctx context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
@@ -85,6 +86,11 @@ func (r *dagGeneratorResource) Schema(_ context.Context, _ resource.SchemaReques
 				Description: "The GCS generation number of the generated file.",
 				Computed:    true,
 			},
+			"use_gcp_service_account_auth": schema.BoolAttribute{
+				Description: "If true, authenticate requests to the backend using the machine's GCP service account.",
+				Optional:    true,
+				Computed:    false,
+			},
 		},
 	}
 }
@@ -108,7 +114,7 @@ func (r *dagGeneratorResource) Create(ctx context.Context, req resource.CreateRe
 	}
 
 	// Initialize API client and service using backend_url from the plan
-	apiClient := client.NewDagGeneratorAPIClient(plan.DagGeneratorBackendURL.ValueString())
+	apiClient := client.NewDagGeneratorAPIClientWithAuth(plan.DagGeneratorBackendURL.ValueString(), plan.UseGCPServiceAccountAuth.ValueBool())
 	dagGenService := &client.DagGeneratorService{Client: apiClient}
 
 	contextJSON := plan.ContextJSON.ValueString()
@@ -133,7 +139,7 @@ func (r *dagGeneratorResource) Read(ctx context.Context, req resource.ReadReques
 	}
 
 	// Initialize API client and service using backend_url from state
-	apiClient := client.NewDagGeneratorAPIClient(state.DagGeneratorBackendURL.ValueString())
+	apiClient := client.NewDagGeneratorAPIClientWithAuth(state.DagGeneratorBackendURL.ValueString(), state.UseGCPServiceAccountAuth.ValueBool())
 	dagGenService := &client.DagGeneratorService{Client: apiClient}
 
 	status, err := dagGenService.GetStatus(ctx, state.TargetGCSPath.ValueString())
@@ -173,7 +179,7 @@ func (r *dagGeneratorResource) Update(ctx context.Context, req resource.UpdateRe
 	}
 
 	// Initialize API client and service using backend_url from the plan
-	apiClient := client.NewDagGeneratorAPIClient(plan.DagGeneratorBackendURL.ValueString())
+	apiClient := client.NewDagGeneratorAPIClientWithAuth(plan.DagGeneratorBackendURL.ValueString(), plan.UseGCPServiceAccountAuth.ValueBool())
 	dagGenService := &client.DagGeneratorService{Client: apiClient}
 
 	contextJSON := plan.ContextJSON.ValueString()
@@ -198,7 +204,7 @@ func (r *dagGeneratorResource) Delete(ctx context.Context, req resource.DeleteRe
 	}
 
 	// Initialize API client and service using backend_url from state
-	apiClient := client.NewDagGeneratorAPIClient(state.DagGeneratorBackendURL.ValueString())
+	apiClient := client.NewDagGeneratorAPIClientWithAuth(state.DagGeneratorBackendURL.ValueString(), state.UseGCPServiceAccountAuth.ValueBool())
 	dagGenService := &client.DagGeneratorService{Client: apiClient}
 
 	err := dagGenService.Delete(ctx, state.TargetGCSPath.ValueString())
