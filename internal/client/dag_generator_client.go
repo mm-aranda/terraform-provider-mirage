@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/google"
 	"google.golang.org/api/idtoken"
 )
 
@@ -34,12 +36,27 @@ func NewDagGeneratorAPIClientWithAuth(baseURL string, useServiceAccountAuth bool
 		HTTPClient:            &http.Client{},
 		useServiceAccountAuth: useServiceAccountAuth,
 	}
+
 	if useServiceAccountAuth {
+		// Try to create ID token source first
 		ts, err := idtoken.NewTokenSource(context.Background(), baseURL)
-		if err == nil {
+		if err != nil {
+			// Check if this is the "unsupported credentials type" error
+			if strings.Contains(err.Error(), "unsupported credentials type") {
+				fmt.Printf("[AUTH] Using OAuth2 access token fallback (user credentials detected)\n")
+				// Try to get a regular OAuth2 token source as fallback
+				ctx := context.Background()
+				creds, err := google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")
+				if err == nil {
+					client.idTokenSource = creds.TokenSource
+				}
+			} else {
+				fmt.Printf("[AUTH] Failed to initialize authentication: %v\n", err)
+			}
+		} else {
+			fmt.Printf("[AUTH] Using ID token authentication\n")
 			client.idTokenSource = ts
 		}
-		// If error, fallback to unauthenticated (could log if needed)
 	}
 	return client
 }
@@ -51,7 +68,9 @@ func (c *DagGeneratorAPIClient) addAuthHeader(ctx context.Context, req *http.Req
 		if err != nil {
 			return err
 		}
-		req.Header.Set("Authorization", "Bearer "+token.AccessToken)
+
+		authHeader := "Bearer " + token.AccessToken
+		req.Header.Set("Authorization", authHeader)
 	}
 	return nil
 }
@@ -76,6 +95,7 @@ type StatusResponse struct {
 // Generate calls the backend to create or update a file.
 func (s *DagGeneratorService) Generate(ctx context.Context, templatePath, templateContent, targetPath string, contextJSON string) (*GenerateResponse, error) {
 	url := fmt.Sprintf("%s/generate", s.Client.BaseURL)
+
 	payload := map[string]interface{}{
 		"template_gcs_path": templatePath,
 		"template_content":  templateContent,
@@ -92,9 +112,11 @@ func (s *DagGeneratorService) Generate(ctx context.Context, templatePath, templa
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+
 	if err := s.Client.addAuthHeader(ctx, req); err != nil {
 		return nil, err
 	}
+
 	resp, err := s.Client.HTTPClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -108,23 +130,28 @@ func (s *DagGeneratorService) Generate(ctx context.Context, templatePath, templa
 		respBody, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("backend returned status %d: %s", resp.StatusCode, string(respBody))
 	}
+
 	var genResp GenerateResponse
 	if err := json.NewDecoder(resp.Body).Decode(&genResp); err != nil {
 		return nil, err
 	}
+
 	return &genResp, nil
 }
 
 // GetStatus retrieves the current checksum and generation for a file.
 func (s *DagGeneratorService) GetStatus(ctx context.Context, path string) (*StatusResponse, error) {
 	url := fmt.Sprintf("%s/status?target_gcs_path=%s", s.Client.BaseURL, path)
+
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
+
 	if err := s.Client.addAuthHeader(ctx, req); err != nil {
 		return nil, err
 	}
+
 	resp, err := s.Client.HTTPClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -141,16 +168,19 @@ func (s *DagGeneratorService) GetStatus(ctx context.Context, path string) (*Stat
 		respBody, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("backend returned status %d: %s", resp.StatusCode, string(respBody))
 	}
+
 	var statusResp StatusResponse
 	if err := json.NewDecoder(resp.Body).Decode(&statusResp); err != nil {
 		return nil, err
 	}
+
 	return &statusResp, nil
 }
 
 // Delete removes a file via the backend service.
 func (s *DagGeneratorService) Delete(ctx context.Context, path string) error {
 	url := fmt.Sprintf("%s/delete", s.Client.BaseURL)
+
 	payload := map[string]interface{}{
 		"target_gcs_path": path,
 	}
@@ -158,14 +188,17 @@ func (s *DagGeneratorService) Delete(ctx context.Context, path string) error {
 	if err != nil {
 		return err
 	}
+
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(body))
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+
 	if err := s.Client.addAuthHeader(ctx, req); err != nil {
 		return err
 	}
+
 	resp, err := s.Client.HTTPClient.Do(req)
 	if err != nil {
 		return err
@@ -179,5 +212,6 @@ func (s *DagGeneratorService) Delete(ctx context.Context, path string) error {
 		respBody, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("backend returned status %d: %s", resp.StatusCode, string(respBody))
 	}
+
 	return nil
 }
