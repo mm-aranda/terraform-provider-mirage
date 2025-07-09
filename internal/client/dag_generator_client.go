@@ -7,12 +7,16 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+
+	"google.golang.org/api/idtoken"
 )
 
 // DagGeneratorAPIClient handles the underlying communication (e.g., HTTP, auth).
 type DagGeneratorAPIClient struct {
-	BaseURL    string
-	HTTPClient *http.Client
+	BaseURL               string
+	HTTPClient            *http.Client
+	useServiceAccountAuth bool
+	idTokenSource         *idtoken.TokenSource
 }
 
 func NewDagGeneratorAPIClient(baseURL string) *DagGeneratorAPIClient {
@@ -20,6 +24,35 @@ func NewDagGeneratorAPIClient(baseURL string) *DagGeneratorAPIClient {
 		BaseURL:    baseURL,
 		HTTPClient: &http.Client{},
 	}
+}
+
+// NewDagGeneratorAPIClientWithAuth creates a client with optional service account auth.
+func NewDagGeneratorAPIClientWithAuth(baseURL string, useServiceAccountAuth bool) *DagGeneratorAPIClient {
+	client := &DagGeneratorAPIClient{
+		BaseURL:               baseURL,
+		HTTPClient:            &http.Client{},
+		useServiceAccountAuth: useServiceAccountAuth,
+	}
+	if useServiceAccountAuth {
+		ts, err := idtoken.NewTokenSource(context.Background(), baseURL)
+		if err == nil {
+			client.idTokenSource = ts
+		}
+		// If error, fallback to unauthenticated (could log if needed)
+	}
+	return client
+}
+
+// addAuthHeader adds the ID token if service account auth is enabled.
+func (c *DagGeneratorAPIClient) addAuthHeader(ctx context.Context, req *http.Request) error {
+	if c.useServiceAccountAuth && c.idTokenSource != nil {
+		token, err := c.idTokenSource.Token()
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+token.AccessToken)
+	}
+	return nil
 }
 
 // DagGeneratorService handles the API calls for the dag_generator resource.
@@ -58,6 +91,9 @@ func (s *DagGeneratorService) Generate(ctx context.Context, templatePath, templa
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if err := s.Client.addAuthHeader(ctx, req); err != nil {
+		return nil, err
+	}
 	resp, err := s.Client.HTTPClient.Do(req)
 	if err != nil {
 		return nil, err
@@ -83,6 +119,9 @@ func (s *DagGeneratorService) GetStatus(ctx context.Context, path string) (*Stat
 	url := fmt.Sprintf("%s/status?target_gcs_path=%s", s.Client.BaseURL, path)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.Client.addAuthHeader(ctx, req); err != nil {
 		return nil, err
 	}
 	resp, err := s.Client.HTTPClient.Do(req)
@@ -123,6 +162,9 @@ func (s *DagGeneratorService) Delete(ctx context.Context, path string) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if err := s.Client.addAuthHeader(ctx, req); err != nil {
+		return err
+	}
 	resp, err := s.Client.HTTPClient.Do(req)
 	if err != nil {
 		return err
