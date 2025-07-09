@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 
+	"golang.org/x/oauth2"
 	"google.golang.org/api/idtoken"
 )
 
@@ -16,7 +17,7 @@ type DagGeneratorAPIClient struct {
 	BaseURL               string
 	HTTPClient            *http.Client
 	useServiceAccountAuth bool
-	idTokenSource         *idtoken.TokenSource
+	idTokenSource         oauth2.TokenSource
 }
 
 func NewDagGeneratorAPIClient(baseURL string) *DagGeneratorAPIClient {
