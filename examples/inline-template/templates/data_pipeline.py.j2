@@ -1,0 +1,65 @@
+from datetime import datetime, timedelta
+from airflow import DAG
+from airflow.operators.bash import BashOperator
+from airflow.operators.email import EmailOperator
+
+# Default arguments for all tasks
+default_args = {
+    'owner': '{{ owner }}',
+    'depends_on_past': False,
+    'start_date': datetime.strptime('{{ start_date }}', '%Y-%m-%d'),
+    'email': {{ notification_emails | tojson }},
+    'email_on_failure': True,
+    'email_on_retry': False,
+    'retries': 1,
+    'retry_delay': timedelta(minutes=5),
+}
+
+# Create the DAG
+dag = DAG(
+    '{{ dag_id }}',
+    default_args=default_args,
+    description='Data pipeline DAG generated from template',
+    schedule_interval='{{ schedule_interval }}',
+    catchup={{ catchup | lower }},
+    max_active_runs={{ max_active_runs }},
+    tags=['data-pipeline', 'analytics', 'generated'],
+)
+
+# Create tasks dynamically from context
+{% for task in tasks %}
+{{ task.task_id }} = BashOperator(
+    task_id='{{ task.task_id }}',
+    bash_command='{{ task.command }}',
+    pool='{{ task.pool }}',
+    retries={{ task.retries }},
+    dag=dag,
+)
+{% endfor %}
+
+# Set up task dependencies
+{% if tasks|length > 1 %}
+{% for i in range(tasks|length - 1) %}
+{{ tasks[i].task_id }} >> {{ tasks[i + 1].task_id }}
+{% endfor %}
+{% endif %}
+
+# Add notification task on success
+success_notification = EmailOperator(
+    task_id='success_notification',
+    to={{ notification_emails | tojson }},
+    subject='✅ {{ dag_id }} completed successfully',
+    html_content='''
+    <h3>Pipeline Completed Successfully</h3>
+    <p><strong>DAG:</strong> {{ dag_id }}</p>
+    <p><strong>Source Table:</strong> {{ source_table }}</p>
+    <p><strong>Target Table:</strong> {{ target_table }}</p>
+    <p><strong>Execution Date:</strong> {{ '{{ ds }}' }}</p>
+    ''',
+    dag=dag,
+)
+
+# Set success notification to run after the last task
+{% if tasks %}
+{{ tasks[-1].task_id }} >> success_notification
+{% endif %} 
