@@ -106,6 +106,7 @@ resource "mirage_dag_generator" "inline_dag" {
 - `id` - The GCS path of the generated file.
 - `generated_file_checksum` - The CRC32C checksum of the generated file in GCS.
 - `gcs_generation_number` - The GCS generation number of the generated file.
+- `template_checksum` - The CRC32C checksum of the template file in GCS (only populated when using `template_gcs_path`).
 
 #### Import
 
@@ -167,6 +168,23 @@ Get the current status of a generated file.
 {
   "checksum": "abc123",
   "generation": "1234567890"
+}
+```
+
+### GET `/template-status`
+
+Get the current status of a template file.
+
+**Query Parameters:**
+- `template_gcs_path` - The GCS path of the template file
+
+**Response:**
+```json
+{
+  "checksum": "abc123",
+  "generation": "1234567890",
+  "last_modified": "2024-01-01T12:00:00Z",
+  "exists": true
 }
 ```
 

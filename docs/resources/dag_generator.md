@@ -92,6 +92,7 @@ In addition to all arguments above, the following attributes are exported:
 * `id` - The GCS path of the generated file (same as `target_gcs_path`).
 * `generated_file_checksum` - The CRC32C checksum of the generated file in GCS.
 * `gcs_generation_number` - The GCS generation number of the generated file.
+* `template_checksum` - The CRC32C checksum of the template file in GCS (only populated when using `template_gcs_path`).
 
 ## Import
 
@@ -128,5 +129,29 @@ This resource requires a compatible backend service with the following endpoints
 - `POST /generate` - Generate or update a file
 - `GET /status` - Get file status and metadata
 - `POST /delete` - Delete a file
+- `GET /template-status` - Get template file status and metadata
+
+### Automatic File Management
+
+The resource includes several automatic behaviors to ensure proper file management:
+
+#### Target Path Changes
+
+When `target_gcs_path` is changed, the resource will:
+1. Delete the old file at the previous target path
+2. Generate a new file at the new target path
+3. Update the resource state with the new path
+
+If deletion of the old file fails, a warning will be logged but the operation will continue.
+
+#### Template Change Detection
+
+When using `template_gcs_path`, the resource automatically detects if the remote template file has been modified:
+1. The resource tracks the template's checksum in its state
+2. On updates, it compares the current template checksum with the stored checksum
+3. If the template has changed, the file is automatically regenerated
+4. If the template hasn't changed and no other parameters have changed, regeneration is skipped for efficiency
+
+This ensures that generated files are always up-to-date with their templates without unnecessary regeneration.
 
 See the main provider documentation for detailed API specifications. 

@@ -92,6 +92,14 @@ type StatusResponse struct {
 	Generation string `json:"generation"`
 }
 
+// TemplateStatusResponse matches the JSON from the backend's /template-status endpoint.
+type TemplateStatusResponse struct {
+	Checksum         string `json:"checksum"`
+	LastModified     string `json:"last_modified"`
+	Generation       string `json:"generation"`
+	Exists           bool   `json:"exists"`
+}
+
 // Generate calls the backend to create or update a file.
 func (s *DagGeneratorService) Generate(ctx context.Context, templatePath, templateContent, targetPath string, contextJSON string) (*GenerateResponse, error) {
 	url := fmt.Sprintf("%s/generate", s.Client.BaseURL)
@@ -175,6 +183,45 @@ func (s *DagGeneratorService) GetStatus(ctx context.Context, path string) (*Stat
 	}
 
 	return &statusResp, nil
+}
+
+// GetTemplateStatus retrieves the current status of a template file.
+func (s *DagGeneratorService) GetTemplateStatus(ctx context.Context, templatePath string) (*TemplateStatusResponse, error) {
+	url := fmt.Sprintf("%s/template-status?template_gcs_path=%s", s.Client.BaseURL, templatePath)
+
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.Client.addAuthHeader(ctx, req); err != nil {
+		return nil, err
+	}
+
+	resp, err := s.Client.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+
+	defer func(Body io.ReadCloser) {
+		_ = Body.Close()
+	}(resp.Body)
+
+	if resp.StatusCode == http.StatusNotFound {
+		return &TemplateStatusResponse{Exists: false}, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("backend returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	var templateStatusResp TemplateStatusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&templateStatusResp); err != nil {
+		return nil, err
+	}
+
+	templateStatusResp.Exists = true
+	return &templateStatusResp, nil
 }
 
 // Delete removes a file via the backend service.
