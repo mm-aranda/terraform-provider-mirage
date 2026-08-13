@@ -8,8 +8,8 @@ The Mirage provider is used to manage Airflow DAG generation through the Mirage 
 terraform {
   required_providers {
     mirage = {
-      source  = "localhost/my-org/mirage"
-      version = "~> 1.0"
+      source  = "mm-aranda/mirage"
+      version = "~> 0.0"
     }
   }
 }

@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/idtoken"
+	"google.golang.org/api/impersonate"
 )
 
 // DagGeneratorAPIClient handles the underlying communication (e.g., HTTP, auth).
@@ -20,6 +23,7 @@ type DagGeneratorAPIClient struct {
 	HTTPClient            *http.Client
 	useServiceAccountAuth bool
 	idTokenSource         oauth2.TokenSource
+	authInitErr           error
 }
 
 func NewDagGeneratorAPIClient(baseURL string) *DagGeneratorAPIClient {
@@ -38,40 +42,102 @@ func NewDagGeneratorAPIClientWithAuth(baseURL string, useServiceAccountAuth bool
 	}
 
 	if useServiceAccountAuth {
-		// Try to create ID token source first
-		ts, err := idtoken.NewTokenSource(context.Background(), baseURL)
+		ts, desc, err := newIDTokenSource(context.Background(), baseURL)
 		if err != nil {
-			// Check if this is the "unsupported credentials type" error
-			if strings.Contains(err.Error(), "unsupported credentials type") {
-				fmt.Printf("[AUTH] Using OAuth2 access token fallback (user credentials detected)\n")
-				// Try to get a regular OAuth2 token source as fallback
-				ctx := context.Background()
-				creds, err := google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")
-				if err == nil {
-					client.idTokenSource = creds.TokenSource
-				}
-			} else {
-				fmt.Printf("[AUTH] Failed to initialize authentication: %v\n", err)
-			}
+			client.authInitErr = err
 		} else {
-			fmt.Printf("[AUTH] Using ID token authentication\n")
+			fmt.Printf("[AUTH] Using %s\n", desc)
 			client.idTokenSource = ts
 		}
 	}
 	return client
 }
 
+// newIDTokenSource returns an OIDC ID token source for invoking the
+// IAM-protected Cloud Run backend. Cloud Run rejects plain OAuth2 access
+// tokens, so every path here must yield an ID token. In order:
+//  1. GOOGLE_IMPERSONATE_SERVICE_ACCOUNT, if set (works for any caller that
+//     has roles/iam.serviceAccountTokenCreator on that account).
+//  2. idtoken.NewTokenSource — works when ADC is a service account.
+//  3. User ADC: the OAuth refresh response carries an `id_token` alongside
+//     the access token (same mechanism as `gcloud auth print-identity-token`);
+//     Cloud Run accepts these user ID tokens even though their audience is
+//     the gcloud client ID rather than the service URL.
+func newIDTokenSource(ctx context.Context, audience string) (oauth2.TokenSource, string, error) {
+	if sa := os.Getenv("GOOGLE_IMPERSONATE_SERVICE_ACCOUNT"); sa != "" {
+		ts, err := impersonate.IDTokenSource(ctx, impersonate.IDTokenConfig{
+			TargetPrincipal: sa,
+			Audience:        serviceOrigin(audience),
+			IncludeEmail:    true,
+		})
+		if err != nil {
+			return nil, "", fmt.Errorf("impersonating %s (from GOOGLE_IMPERSONATE_SERVICE_ACCOUNT): %w", sa, err)
+		}
+		return ts, fmt.Sprintf("impersonated ID token (%s)", sa), nil
+	}
+
+	ts, err := idtoken.NewTokenSource(ctx, serviceOrigin(audience))
+	if err == nil {
+		return ts, "service account ID token", nil
+	}
+	if !strings.Contains(err.Error(), "unsupported credentials type") {
+		return nil, "", fmt.Errorf("creating ID token source: %w", err)
+	}
+
+	// ADC is a user account: idtoken.NewTokenSource refuses those, but the
+	// user refresh flow can still mint an ID token.
+	creds, err := google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")
+	if err != nil {
+		return nil, "", fmt.Errorf("no usable Google credentials: %w (run `gcloud auth application-default login`)", err)
+	}
+	return oauth2.ReuseTokenSource(nil, userIDTokenSource{base: creds.TokenSource}), "user-credential ID token", nil
+}
+
+// userIDTokenSource extracts the `id_token` field that Google's token
+// endpoint returns next to the access token when refreshing user credentials.
+type userIDTokenSource struct {
+	base oauth2.TokenSource
+}
+
+func (s userIDTokenSource) Token() (*oauth2.Token, error) {
+	tok, err := s.base.Token()
+	if err != nil {
+		return nil, err
+	}
+	idt, _ := tok.Extra("id_token").(string)
+	if idt == "" {
+		return nil, fmt.Errorf("user credentials did not include an ID token, so the Cloud Run backend cannot be invoked: " +
+			"re-run `gcloud auth application-default login`, or set GOOGLE_IMPERSONATE_SERVICE_ACCOUNT=<sa> to impersonate a service account")
+	}
+	return &oauth2.Token{AccessToken: idt, Expiry: tok.Expiry}, nil
+}
+
+// serviceOrigin trims the path from the backend URL: Cloud Run expects the
+// ID token audience to be the bare service URL, not e.g. .../api/v1.
+func serviceOrigin(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return rawURL
+	}
+	return u.Scheme + "://" + u.Host
+}
+
 // addAuthHeader adds the ID token if service account auth is enabled.
 func (c *DagGeneratorAPIClient) addAuthHeader(ctx context.Context, req *http.Request) error {
-	if c.useServiceAccountAuth && c.idTokenSource != nil {
-		token, err := c.idTokenSource.Token()
-		if err != nil {
-			return err
-		}
-
-		authHeader := "Bearer " + token.AccessToken
-		req.Header.Set("Authorization", authHeader)
+	if !c.useServiceAccountAuth {
+		return nil
 	}
+	if c.authInitErr != nil {
+		return fmt.Errorf("authentication was not initialized: %w", c.authInitErr)
+	}
+	if c.idTokenSource == nil {
+		return fmt.Errorf("authentication is enabled but no token source is available")
+	}
+	token, err := c.idTokenSource.Token()
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token.AccessToken)
 	return nil
 }
 
@@ -94,10 +160,10 @@ type StatusResponse struct {
 
 // TemplateStatusResponse matches the JSON from the backend's /template-status endpoint.
 type TemplateStatusResponse struct {
-	Checksum         string `json:"checksum"`
-	LastModified     string `json:"last_modified"`
-	Generation       string `json:"generation"`
-	Exists           bool   `json:"exists"`
+	Checksum     string `json:"checksum"`
+	LastModified string `json:"last_modified"`
+	Generation   string `json:"generation"`
+	Exists       bool   `json:"exists"`
 }
 
 // Generate calls the backend to create or update a file.
