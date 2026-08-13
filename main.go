@@ -15,7 +15,7 @@ var version = "dev"
 func main() {
 	err := providerserver.Serve(context.Background(), provider.New(version), providerserver.ServeOpts{
 		// This address must match the one in your Terraform configurations.
-		Address: "localhost/my-org/mirage",
+		Address: "registry.terraform.io/mm-aranda/mirage",
 	})
 
 	if err != nil {

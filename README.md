@@ -22,8 +22,8 @@ Add the following to your Terraform configuration:
 terraform {
   required_providers {
     mirage = {
-      source  = "localhost/my-org/mirage"
-      version = "~> 1.0"
+      source  = "mm-aranda/mirage"
+      version = "~> 0.0"
     }
   }
 }
@@ -35,13 +35,22 @@ provider "mirage" {
 
 ### Local Development
 
-For local development, build and install the provider:
+For local development, build the provider and point Terraform at the build directory with a `dev_overrides` block in `~/.terraformrc`:
 
 ```bash
-go build -o terraform-provider-mirage
-mkdir -p ~/.terraform.d/plugins/localhost/my-org/mirage/1.0.0/darwin_amd64
-cp terraform-provider-mirage ~/.terraform.d/plugins/localhost/my-org/mirage/1.0.0/darwin_amd64/
+go build -o /path/to/tf-plugins/terraform-provider-mirage
 ```
+
+```hcl
+provider_installation {
+  dev_overrides {
+    "mm-aranda/mirage" = "/path/to/tf-plugins"
+  }
+  direct {}
+}
+```
+
+With `dev_overrides` active, `terraform plan` and `apply` use the local build directly (no `terraform init` needed for this provider).
 
 ## Provider Configuration
 
@@ -99,7 +108,7 @@ resource "mirage_dag_generator" "inline_dag" {
 - `template_gcs_path` - (Optional) The full `gs://` path to the source Jinja2 template. Mutually exclusive with `template_content`.
 - `template_content` - (Optional) The content of the template as a string. Mutually exclusive with `template_gcs_path`.
 - `context_json` - (Optional) A JSON string representing the dynamic context for template rendering.
-- `use_gcp_service_account_auth` - (Optional) If true, authenticate requests using the machine's GCP service account. Default: `false`.
+- `use_gcp_service_account_auth` - (Optional) If true, authenticate requests to the backend with a Google OIDC ID token (service account, impersonated, or user credentials — see Authentication below). Default: `false`.
 
 #### Attributes Reference
 
@@ -120,11 +129,15 @@ terraform import mirage_dag_generator.example gs://your-bucket/dags/generated_da
 
 The provider supports two authentication methods:
 
-### 1. GCP Service Account Authentication
+### 1. Google Cloud Authentication
 
-Set `use_gcp_service_account_auth = true` in your resource configuration. The provider will use:
-- ID tokens for service account authentication
-- OAuth2 access tokens as fallback for user credentials
+Set `use_gcp_service_account_auth = true` in your resource configuration. The backend is expected to be an IAM-protected Cloud Run service, which requires an OIDC ID token (plain OAuth2 access tokens are rejected). The provider obtains one from the first of these that applies:
+
+1. **Impersonation** — if the `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT` environment variable is set, the provider mints an ID token as that service account. The caller needs `roles/iam.serviceAccountTokenCreator` on it.
+2. **Service account credentials** — if Application Default Credentials (ADC) resolve to a service account (CI, Cloud Run, GCE), the standard ID token flow is used.
+3. **User credentials** — if ADC resolve to a user account (`gcloud auth application-default login`), the provider extracts the `id_token` returned alongside the access token, the same mechanism `gcloud auth print-identity-token` uses. Cloud Run accepts these user ID tokens.
+
+In every case the caller needs `roles/run.invoker` on the backend Cloud Run service. If no ID token can be obtained, requests fail with an error explaining what to configure.
 
 ### 2. No Authentication
 

@@ -83,7 +83,7 @@ The following arguments are supported:
 * `template_gcs_path` - (Optional) The full `gs://` path to the source Jinja2 template. Mutually exclusive with `template_content`.
 * `template_content` - (Optional) The content of the template as a string. Mutually exclusive with `template_gcs_path`.
 * `context_json` - (Optional) A JSON string representing the dynamic context for template rendering.
-* `use_gcp_service_account_auth` - (Optional) If true, authenticate requests using the machine's GCP service account. Defaults to `false`.
+* `use_gcp_service_account_auth` - (Optional) If true, authenticate requests to the backend with a Google OIDC ID token (service account, impersonated, or user credentials — see Authentication below). Defaults to `false`.
 
 ## Attributes Reference
 
@@ -110,10 +110,12 @@ You must specify exactly one of `template_gcs_path` or `template_content`. The r
 
 ### Authentication
 
-When `use_gcp_service_account_auth` is set to `true`, the provider will:
-1. First attempt to use ID tokens for service account authentication
-2. Fall back to OAuth2 access tokens if user credentials are detected
-3. Log authentication method selection for debugging
+When `use_gcp_service_account_auth` is set to `true`, the provider sends an OIDC ID token with every request, obtained from the first of these that applies:
+1. Impersonation of the service account named in the `GOOGLE_IMPERSONATE_SERVICE_ACCOUNT` environment variable, if set.
+2. The standard ID token flow, when Application Default Credentials resolve to a service account.
+3. The `id_token` from the user-credential refresh flow, when Application Default Credentials resolve to a user account (`gcloud auth application-default login`).
+
+The caller needs `roles/run.invoker` on the backend Cloud Run service. The selected method is logged for debugging, and requests fail with a descriptive error if no ID token can be obtained.
 
 ### File Management
 
